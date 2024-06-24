@@ -1,84 +1,47 @@
 import pandas as pd
-from io import StringIO
-import re
-import subprocess
 
-data = """
-00:10:02   0/0000:4A:0      0%       0%      1%  46068M   559M  NVIDIA_A40
-           1/0000:61:0      0%       0%      1%  46068M   559M  NVIDIA_A40
-           2/0000:CA:0      0%       0%      1%  46068M   559M  NVIDIA_A40
-           3/0000:E1:0     36%      34%     73%  46068M 33822M  NVIDIA_A40
-00:20:02   0/0000:4A:0      0%       0%      1%  46068M   559M  NVIDIA_A40
-           1/0000:61:0      0%       0%      1%  46068M   559M  NVIDIA_A40
-           2/0000:CA:0      0%       0%      1%  46068M   559M  NVIDIA_A40
-           3/0000:E1:0     36%      34%     63%  46068M 29046M  NVIDIA_A40
-00:30:02   0/0000:4A:0      0%       0%      1%  46068M   559M  NVIDIA_A40
-           1/0000:61:0      0%       0%      1%  46068M   559M  NVIDIA_A40
-           2/0000:CA:0      0%       0%      1%  46068M   559M  NVIDIA_A40
-           3/0000:E1:0     34%      33%     73%  46068M 33822M  NVIDIA_A40
-00:40:02   0/0000:4A:0      0%       0%      1%  46068M   559M  NVIDIA_A40
-           1/0000:61:0      0%       0%      1%  46068M   559M  NVIDIA_A40
-           2/0000:CA:0      0%       0%      1%  46068M   559M  NVIDIA_A40
-           3/0000:E1:0     34%      32%     37%  46068M 17191M  NVIDIA_A40
-00:50:02   0/0000:4A:0      0%       0%      1%  46068M   559M  NVIDIA_A40
-           1/0000:61:0      0%       0%      1%  46068M   559M  NVIDIA_A40
-           2/0000:CA:0      0%       0%      1%  46068M   559M  NVIDIA_A40
-"""
+import panel as pn
+import holoviews as hv
+from holoviews import opts
 
-def _parse_dataframe(data: str):
-    # Read the data into a DataFrame
-    # create the fixed-width format DataFrame
-    format = [
-        (0, 8),
-        (8, 20),
-        (20, 27),
-        (27, 34),
-        (34, 41),
-        (41, 48),
-        (48, 55),
-        (55, 63),
-        (63, 70),
-    ]
-    df = pd.read_fwf(
-        StringIO(data),
-        colspecs=format,
-        skiprows=1,
-        names=[
-            "time",
-            "busaddr",
-            "gpubusy",
-            "membusy",
-            "memocc",
-            "memtot",
-            "memuse",
-            "gputype",
-            "_gpu_",
-        ],
+import datasource
+
+hv.extension("bokeh")
+
+
+def create_app():
+
+    # Create a Select widget
+    variable_select = pn.widgets.Select(
+        name="Variable", options=datasource.DATA_COLUMNS, value=datasource.DATA_COLUMNS[0]
     )
-    # Forward fill the 'time' column to fill the missing values
-    df["time"].fillna(method="ffill", inplace=True)
-
-    return df
-
-
-def main():
-
-    # Call the bash command
-    process = subprocess.Popen(['atopsar', '-g'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
-    # Get the output
-    stdout, stderr = process.communicate()
-
-    # Decode the output
-    data = stdout.decode('utf-8')
     
-    # remove the first five lines
-    data = '\n'.join(data.split('\n')[5:])
+    # create a date selector
+    calendar = pn.widgets.DatePicker(name="Date", value=pd.Timestamp.now(), end=pd.Timestamp.now().date())
+
+    # Create a dynamic map that updates the plot based on the selected variable
+    @pn.depends(variable_select.param.value, calendar.param.value)
+    def create_plot(variable, date):
+        # Create a DataFrame
+        df = datasource.get_data(date=date)
+        unique_gpus = df["busaddr"].unique()
+
+        # Create a curve for each GPU
+        curves = []
+        for gpu in unique_gpus:
+            df_gpu = df[df["busaddr"] == gpu]
+            curves.append(hv.Curve(df_gpu, "time", variable, label=f"GPU: {gpu}"))
+
+        # include legend in plot
+        return hv.Overlay(curves).opts(
+            width=600, height=400, title="GPU Utilization", legend_position="right"
+        )
+
+    # Create a Panel application
+    app = pn.Row(pn.Column(calendar, variable_select), create_plot)
     
-    df = _parse_dataframe(data)
-    print(df)
+    return app
 
-main()
 
-# Now you can use the 'data' variable as your data
-
+app = create_app()
+app.servable(title="GPU utilization")
